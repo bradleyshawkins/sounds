@@ -1,0 +1,30 @@
+[project]
+name = "sounds"
+version = "0.1.0"
+description = "Audio playback tool with time-stretching and pitch-shifting"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "librosa>=0.10",
+    "numpy>=2.0",
+    "PyQt6>=6.7",
+    "pyrubberband>=0.3",
+    "sounddevice>=0.5",
+    "soundfile>=0.12",
+    "yt-dlp>=2024.1",
+]
+
+[project.scripts]
+sounds = "sounds.main:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[dependency-groups]
+dev = [
+    "pyinstaller>=6.0",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/sounds"]
