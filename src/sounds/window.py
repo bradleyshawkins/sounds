@@ -7,6 +7,7 @@ from PyQt6.QtWidgets import (
     QHBoxLayout,
     QInputDialog,
     QLabel,
+    QLineEdit,
     QMainWindow,
     QMessageBox,
     QPushButton,
@@ -57,6 +58,12 @@ class MainWindow(QMainWindow):
         # doesn't fight the drag.
         self._seeking: bool = False
 
+        # Debounce for pitch spinboxes — fires 400 ms after the last valueChanged.
+        self._pitch_timer = QTimer(self)
+        self._pitch_timer.setSingleShot(True)
+        self._pitch_timer.setInterval(400)
+        self._pitch_timer.timeout.connect(self._trigger_reprocess)
+
         # Position display + play-button sync; runs whenever audio is loaded.
         self._position_timer = QTimer(self)
         self._position_timer.setInterval(100)
@@ -84,7 +91,7 @@ class MainWindow(QMainWindow):
 
         layout.addLayout(self._build_file_row())
         layout.addLayout(self._build_transport_row())
-        layout.addWidget(self._build_seek_slider())
+        layout.addLayout(self._build_seek_row())
         layout.addLayout(self._build_speed_row())
         layout.addLayout(self._build_pitch_row())
         layout.addStretch()
@@ -119,13 +126,31 @@ class MainWindow(QMainWindow):
         row.addStretch()
         return row
 
-    def _build_seek_slider(self) -> QSlider:
+    def _build_seek_row(self) -> QHBoxLayout:
         self._seek_slider = QSlider(Qt.Orientation.Horizontal)
         self._seek_slider.setRange(0, 10000)
         self._seek_slider.setValue(0)
         self._seek_slider.sliderPressed.connect(self._on_seek_pressed)
         self._seek_slider.sliderReleased.connect(self._on_seek_released)
-        return self._seek_slider
+
+        # Current position — editable so the user can type a time and seek.
+        self._pos_edit = QLineEdit("0:00")
+        self._pos_edit.setFixedWidth(52)
+        self._pos_edit.setAlignment(Qt.AlignmentFlag.AlignRight)
+        self._pos_edit.setToolTip("Current position (M:SS) — press Enter or click away to seek")
+        self._pos_edit.editingFinished.connect(self._on_pos_edit_committed)
+
+        # Total duration — read-only.
+        self._dur_label = QLineEdit("0:00")
+        self._dur_label.setFixedWidth(52)
+        self._dur_label.setAlignment(Qt.AlignmentFlag.AlignLeft)
+        self._dur_label.setReadOnly(True)
+
+        row = QHBoxLayout()
+        row.addWidget(self._pos_edit)
+        row.addWidget(self._seek_slider)
+        row.addWidget(self._dur_label)
+        return row
 
     def _build_speed_row(self) -> QHBoxLayout:
         row = QHBoxLayout()
@@ -164,14 +189,14 @@ class MainWindow(QMainWindow):
         self._semitones_spin.setValue(0)
         self._semitones_spin.setSuffix(" st")
         self._semitones_spin.setToolTip("Semitones (±24)")
-        self._semitones_spin.editingFinished.connect(self._trigger_reprocess)
+        self._semitones_spin.valueChanged.connect(self._on_pitch_changed)
 
         self._cents_spin = QSpinBox()
         self._cents_spin.setRange(-100, 100)
         self._cents_spin.setValue(0)
         self._cents_spin.setSuffix(" ct")
         self._cents_spin.setToolTip("Fine tuning in cents (±100)")
-        self._cents_spin.editingFinished.connect(self._trigger_reprocess)
+        self._cents_spin.valueChanged.connect(self._on_pitch_changed)
 
         row.addWidget(self._semitones_spin)
         row.addWidget(self._cents_spin)
@@ -215,6 +240,7 @@ class MainWindow(QMainWindow):
         self._set_loading(False)
         self._set_transport_enabled(True)
         dur = _fmt_time(self.engine.duration_seconds())
+        self._dur_label.setText(dur)
         self._status.showMessage(f"Ready — {dur}")
         self._seek_slider.setValue(0)
         self._update_position()
@@ -232,10 +258,8 @@ class MainWindow(QMainWindow):
         self._sync_play_btn()
 
     def _on_stop(self) -> None:
-        self.engine.stop()
+        self.engine.pause()
         self._sync_play_btn()
-        self._update_position()
-        self._seek_slider.setValue(0)
 
     def _sync_play_btn(self) -> None:
         self._play_btn.setText("⏸" if self.engine.is_playing else "▶")
@@ -251,6 +275,10 @@ class MainWindow(QMainWindow):
         pos = _fmt_time(self.engine.position_seconds())
         dur = _fmt_time(self.engine.duration_seconds())
         self._position_label.setText(f"{pos} / {dur}")
+        # Keep the seek-bar time boxes in sync unless the user is editing them.
+        if not self._pos_edit.hasFocus():
+            self._pos_edit.setText(pos)
+        self._dur_label.setText(dur)
 
     def _sync_seek_slider(self) -> None:
         raw = self.engine._raw_samples
@@ -274,6 +302,22 @@ class MainWindow(QMainWindow):
             sample = int(self._seek_slider.value() / 10000 * raw)
             self.engine.seek(sample)
 
+    def _on_pos_edit_committed(self) -> None:
+        """Parse a typed M:SS time and seek to it."""
+        text = self._pos_edit.text().strip()
+        try:
+            if ":" in text:
+                parts = text.split(":", 1)
+                seconds = int(parts[0]) * 60 + float(parts[1])
+            else:
+                seconds = float(text)
+        except ValueError:
+            self._pos_edit.setText(_fmt_time(self.engine.position_seconds()))
+            return
+        sample = int(seconds * self.engine._sample_rate)
+        self.engine.seek(sample)
+        self._pos_edit.clearFocus()
+
     # ------------------------------------------------------------------
     # Speed / pitch changes
     # ------------------------------------------------------------------
@@ -291,6 +335,9 @@ class MainWindow(QMainWindow):
         self._speed_slider.setValue(value)
         self._speed_slider.blockSignals(False)
         self._trigger_reprocess()
+
+    def _on_pitch_changed(self) -> None:
+        self._pitch_timer.start()  # resets the 400 ms countdown
 
     def _trigger_reprocess(self) -> None:
         """Start a Rubberband reprocess with the current UI parameter values."""

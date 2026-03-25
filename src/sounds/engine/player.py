@@ -185,7 +185,12 @@ class PlaybackEngine:
         if was_playing:
             self.pause()
 
+        # Explicitly snapshot and restore position so it survives the reprocess
+        # regardless of where the playback thread last wrote _input_pos.
+        saved_pos = self._input_pos
         self._reprocess()
+        with self._lock:
+            self._input_pos = saved_pos
 
         if was_playing:
             self.play()
@@ -203,28 +208,18 @@ class PlaybackEngine:
         speed = self._speed
         pitch = self.total_semitones
 
-        # --no-transients --window-short: skip transient detection and use a
-        # shorter analysis window.  Both are R2-engine flags that meaningfully
-        # cut processing time with an acceptable quality tradeoff for a music
-        # practice tool.
-        speed_flags: dict = {"--no-transients": "", "--window-short": ""}
-
         if speed == 1.0 and pitch == 0.0:
             processed = audio.copy()
         elif speed == 1.0:
-            processed = pyrb.pitch_shift(
-                audio, self._sample_rate, n_steps=pitch, rbargs=speed_flags
-            )
+            processed = pyrb.pitch_shift(audio, self._sample_rate, n_steps=pitch)
         elif pitch == 0.0:
-            processed = pyrb.time_stretch(
-                audio, self._sample_rate, rate=speed, rbargs=speed_flags
-            )
+            processed = pyrb.time_stretch(audio, self._sample_rate, rate=speed)
         else:
             processed = pyrb.time_stretch(
                 audio,
                 self._sample_rate,
                 rate=speed,
-                rbargs={"--pitch": pitch, **speed_flags},
+                rbargs={"--pitch": pitch},
             )
 
         with self._lock:
@@ -262,6 +257,9 @@ class PlaybackEngine:
                             self._input_pos = loop_start_in
                         continue
                     else:
+                        # Reset so pressing play again starts from the beginning.
+                        with self._lock:
+                            self._input_pos = 0
                         self._playing = False
                         break
 
