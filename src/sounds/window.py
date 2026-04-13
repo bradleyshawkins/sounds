@@ -264,6 +264,13 @@ class MainWindow(QMainWindow):
         layout = QVBoxLayout(panel)
         layout.setContentsMargins(0, 0, 0, 0)
 
+        # Search bar
+        self._search_edit = QLineEdit()
+        self._search_edit.setPlaceholderText("Search title, artist, or album…")
+        self._search_edit.setClearButtonEnabled(True)
+        self._search_edit.textChanged.connect(self._filter_library)
+        layout.addWidget(self._search_edit)
+
         self._library_table = QTableWidget(0, 5)
         self._library_table.setHorizontalHeaderLabels(
             ["Title", "Artist", "Album", "Duration", "Path"]
@@ -421,6 +428,19 @@ class MainWindow(QMainWindow):
         self._library_table.resizeColumnToContents(1)
         self._library_table.resizeColumnToContents(2)
         self._library_table.resizeColumnToContents(3)
+
+    def _filter_library(self, text: str) -> None:
+        """Show only rows whose title, artist, or album contain the search text."""
+        query = text.strip().lower()
+        for row in range(self._library_table.rowCount()):
+            if query:
+                match = any(
+                    query in (self._library_table.item(row, col) or QTableWidgetItem()).text().lower()
+                    for col in (0, 1, 2)  # Title, Artist, Album
+                )
+            else:
+                match = True
+            self._library_table.setRowHidden(row, not match)
 
     def _on_library_double_click(self) -> None:
         row = self._library_table.currentRow()
