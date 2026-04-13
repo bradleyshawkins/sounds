@@ -58,6 +58,10 @@ class MainWindow(QMainWindow):
         # doesn't fight the drag.
         self._seeking: bool = False
 
+        # Loop A/B points in input-sample space; None means not set.
+        self._loop_start_samples: int | None = None
+        self._loop_end_samples: int | None = None
+
         # Debounce for pitch spinboxes — fires 400 ms after the last valueChanged.
         self._pitch_timer = QTimer(self)
         self._pitch_timer.setSingleShot(True)
@@ -92,6 +96,7 @@ class MainWindow(QMainWindow):
         layout.addLayout(self._build_file_row())
         layout.addLayout(self._build_transport_row())
         layout.addLayout(self._build_seek_row())
+        layout.addLayout(self._build_loop_row())
         layout.addLayout(self._build_speed_row())
         layout.addLayout(self._build_pitch_row())
         layout.addStretch()
@@ -203,6 +208,45 @@ class MainWindow(QMainWindow):
         row.addStretch()
         return row
 
+    def _build_loop_row(self) -> QHBoxLayout:
+        self._loop_btn = QPushButton("⟲ Loop")
+        self._loop_btn.setCheckable(True)
+        self._loop_btn.setToolTip("Enable A/B loop")
+        self._loop_btn.toggled.connect(self._on_loop_toggled)
+
+        self._loop_a_edit = QLineEdit("—")
+        self._loop_a_edit.setFixedWidth(52)
+        self._loop_a_edit.setAlignment(Qt.AlignmentFlag.AlignRight)
+        self._loop_a_edit.setToolTip("Loop start (A) — type M:SS or press Set")
+        self._loop_a_edit.editingFinished.connect(self._on_loop_a_edited)
+
+        self._loop_b_edit = QLineEdit("—")
+        self._loop_b_edit.setFixedWidth(52)
+        self._loop_b_edit.setAlignment(Qt.AlignmentFlag.AlignRight)
+        self._loop_b_edit.setToolTip("Loop end (B) — type M:SS or press Set")
+        self._loop_b_edit.editingFinished.connect(self._on_loop_b_edited)
+
+        self._set_a_btn = QPushButton("Set A")
+        self._set_a_btn.setToolTip("Mark current position as loop start")
+        self._set_a_btn.clicked.connect(self._on_set_loop_a)
+
+        self._set_b_btn = QPushButton("Set B")
+        self._set_b_btn.setToolTip("Mark current position as loop end")
+        self._set_b_btn.clicked.connect(self._on_set_loop_b)
+
+        row = QHBoxLayout()
+        row.addWidget(self._loop_btn)
+        row.addSpacing(8)
+        row.addWidget(QLabel("A:"))
+        row.addWidget(self._loop_a_edit)
+        row.addWidget(self._set_a_btn)
+        row.addSpacing(8)
+        row.addWidget(QLabel("B:"))
+        row.addWidget(self._loop_b_edit)
+        row.addWidget(self._set_b_btn)
+        row.addStretch()
+        return row
+
     # ------------------------------------------------------------------
     # File / URL loading
     # ------------------------------------------------------------------
@@ -239,6 +283,7 @@ class MainWindow(QMainWindow):
     def _on_load_done(self) -> None:
         self._set_loading(False)
         self._set_transport_enabled(True)
+        self._reset_loop()
         dur = _fmt_time(self.engine.duration_seconds())
         self._dur_label.setText(dur)
         self._status.showMessage(f"Ready — {dur}")
@@ -304,18 +349,11 @@ class MainWindow(QMainWindow):
 
     def _on_pos_edit_committed(self) -> None:
         """Parse a typed M:SS time and seek to it."""
-        text = self._pos_edit.text().strip()
-        try:
-            if ":" in text:
-                parts = text.split(":", 1)
-                seconds = int(parts[0]) * 60 + float(parts[1])
-            else:
-                seconds = float(text)
-        except ValueError:
+        secs = self._parse_time(self._pos_edit.text())
+        if secs is None:
             self._pos_edit.setText(_fmt_time(self.engine.position_seconds()))
             return
-        sample = int(seconds * self.engine._sample_rate)
-        self.engine.seek(sample)
+        self.engine.seek(int(secs * self.engine._sample_rate))
         self._pos_edit.clearFocus()
 
     # ------------------------------------------------------------------
@@ -378,10 +416,95 @@ class MainWindow(QMainWindow):
     # Helpers
     # ------------------------------------------------------------------
 
+    # ------------------------------------------------------------------
+    # Loop controls
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _parse_time(text: str) -> float | None:
+        """Parse M:SS or raw seconds string into seconds. Returns None if invalid."""
+        text = text.strip()
+        try:
+            if ":" in text:
+                parts = text.split(":", 1)
+                return int(parts[0]) * 60 + float(parts[1])
+            return float(text)
+        except (ValueError, IndexError):
+            return None
+
+    def _on_loop_toggled(self, _: bool) -> None:
+        self._update_engine_loop()
+
+    def _on_set_loop_a(self) -> None:
+        self._loop_start_samples = self.engine._input_pos
+        self._loop_a_edit.setText(_fmt_time(self.engine.position_seconds()))
+        self._update_engine_loop()
+
+    def _on_set_loop_b(self) -> None:
+        self._loop_end_samples = self.engine._input_pos
+        self._loop_b_edit.setText(_fmt_time(self.engine.position_seconds()))
+        self._update_engine_loop()
+
+    def _on_loop_a_edited(self) -> None:
+        secs = self._parse_time(self._loop_a_edit.text())
+        if secs is None:
+            # Revert to last known good value
+            self._loop_a_edit.setText(
+                _fmt_time(self._loop_start_samples / self.engine._sample_rate)
+                if self._loop_start_samples is not None else "—"
+            )
+            return
+        self._loop_start_samples = int(secs * self.engine._sample_rate)
+        self._loop_a_edit.setText(_fmt_time(secs))
+        self._update_engine_loop()
+
+    def _on_loop_b_edited(self) -> None:
+        secs = self._parse_time(self._loop_b_edit.text())
+        if secs is None:
+            self._loop_b_edit.setText(
+                _fmt_time(self._loop_end_samples / self.engine._sample_rate)
+                if self._loop_end_samples is not None else "—"
+            )
+            return
+        self._loop_end_samples = int(secs * self.engine._sample_rate)
+        self._loop_b_edit.setText(_fmt_time(secs))
+        self._update_engine_loop()
+
+    def _update_engine_loop(self) -> None:
+        """Push the current loop state to the engine."""
+        if not self._loop_btn.isChecked():
+            self.engine.set_loop(None, None)
+            return
+        if self._loop_start_samples is None or self._loop_end_samples is None:
+            self.engine.set_loop(None, None)
+            return
+        start = self._loop_start_samples
+        end = self._loop_end_samples
+        if start > end:
+            start, end = end, start
+        self.engine.set_loop(start, end)
+
+    def _reset_loop(self) -> None:
+        """Clear loop state when a new file is loaded."""
+        self._loop_start_samples = None
+        self._loop_end_samples = None
+        self._loop_btn.setChecked(False)
+        self._loop_a_edit.setText("—")
+        self._loop_b_edit.setText("—")
+        self.engine.set_loop(None, None)
+
     def _set_transport_enabled(self, enabled: bool) -> None:
-        self._play_btn.setEnabled(enabled)
-        self._stop_btn.setEnabled(enabled)
-        self._seek_slider.setEnabled(enabled)
+        for w in (
+            self._play_btn,
+            self._stop_btn,
+            self._seek_slider,
+            self._loop_btn,
+            self._set_a_btn,
+            self._set_b_btn,
+            self._loop_a_edit,
+            self._loop_b_edit,
+        ):
+            w.setEnabled(enabled)
 
     def _set_loading(self, loading: bool) -> None:
         for w in (

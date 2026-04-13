@@ -236,20 +236,19 @@ class PlaybackEngine:
         """Playback thread: reads from _processed and writes to sounddevice."""
         channels = self._processed.shape[1]
 
-        with self._lock:
-            loop_start_in = self._loop_start
-            loop_end_in = self._loop_end if self._loop_end is not None else self._raw_samples
-
-        out_end = self._input_to_output(loop_end_in)
-
         with sd.OutputStream(
             samplerate=self._sample_rate,
             channels=channels,
             dtype="float32",
         ) as stream:
             while self._playing:
+                # Read loop points each iteration so UI changes take effect immediately.
                 with self._lock:
                     out_pos = self._input_to_output(self._input_pos)
+                    loop_start_in = self._loop_start
+                    loop_end_raw = self._loop_end if self._loop_end is not None else self._raw_samples
+
+                out_end = self._input_to_output(loop_end_raw)
 
                 if out_pos >= out_end:
                     if loop_start_in is not None:
