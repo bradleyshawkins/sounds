@@ -50,10 +50,6 @@ class MainWindow(QMainWindow):
         self.engine = PlaybackEngine()
         self._worker: _Worker | None = None
 
-        # If the user adjusts speed/pitch while a reprocess is already running,
-        # the latest values are saved here and applied as soon as it finishes.
-        self._pending_params: tuple[float, float, float] | None = None
-
         # True while the user is dragging the seek bar so the position timer
         # doesn't fight the drag.
         self._seeking: bool = False
@@ -62,11 +58,11 @@ class MainWindow(QMainWindow):
         self._loop_start_samples: int | None = None
         self._loop_end_samples: int | None = None
 
-        # Debounce for pitch spinboxes — fires 400 ms after the last valueChanged.
+        # Debounce for pitch spinboxes — fires 200 ms after the last valueChanged.
         self._pitch_timer = QTimer(self)
         self._pitch_timer.setSingleShot(True)
-        self._pitch_timer.setInterval(400)
-        self._pitch_timer.timeout.connect(self._trigger_reprocess)
+        self._pitch_timer.setInterval(200)
+        self._pitch_timer.timeout.connect(self._apply_pitch)
 
         # Position display + play-button sync; runs whenever audio is loaded.
         self._position_timer = QTimer(self)
@@ -166,10 +162,10 @@ class MainWindow(QMainWindow):
         self._speed_slider.setValue(100)
         self._speed_slider.setTickInterval(10)
         self._speed_slider.setTickPosition(QSlider.TickPosition.TicksBelow)
-        # valueChanged keeps the spinbox in sync while dragging; the actual
-        # reprocess is triggered on sliderReleased (once, when mouse lifts).
+        # valueChanged keeps the spinbox in sync while dragging; the speed is
+        # applied on sliderReleased (once, when mouse lifts).
         self._speed_slider.valueChanged.connect(self._on_speed_slider_moved)
-        self._speed_slider.sliderReleased.connect(self._trigger_reprocess)
+        self._speed_slider.sliderReleased.connect(self._apply_speed)
 
         self._speed_spin = QDoubleSpinBox()
         self._speed_spin.setRange(0.10, 2.00)
@@ -372,45 +368,17 @@ class MainWindow(QMainWindow):
         self._speed_slider.blockSignals(True)
         self._speed_slider.setValue(value)
         self._speed_slider.blockSignals(False)
-        self._trigger_reprocess()
+        self._apply_speed()
 
     def _on_pitch_changed(self) -> None:
-        self._pitch_timer.start()  # resets the 400 ms countdown
+        self._pitch_timer.start()  # resets the 200 ms countdown
 
-    def _trigger_reprocess(self) -> None:
-        """Start a Rubberband reprocess with the current UI parameter values."""
-        if self.engine._raw is None:
-            return
+    def _apply_speed(self) -> None:
+        self.engine.speed = self._speed_slider.value() / 100.0
 
-        speed = self._speed_slider.value() / 100.0
-        semitones = float(self._semitones_spin.value())
-        cents = float(self._cents_spin.value())
-
-        if self._worker and self._worker.isRunning():
-            self._pending_params = (speed, semitones, cents)
-            return
-
-        self._start_reprocess_worker(speed, semitones, cents)
-
-    def _start_reprocess_worker(self, speed: float, semitones: float, cents: float) -> None:
-        self._pending_params = None
-        self._status.showMessage("Processing…")
-        self._open_btn.setEnabled(False)
-        self._url_btn.setEnabled(False)
-
-        worker = _Worker(lambda: self.engine.set_params(speed, semitones, cents))
-        worker.finished.connect(self._on_reprocess_done)
-        worker.error.connect(self._on_worker_error)
-        self._worker = worker
-        worker.start()
-
-    def _on_reprocess_done(self) -> None:
-        self._open_btn.setEnabled(True)
-        self._url_btn.setEnabled(True)
-        self._status.showMessage("Ready")
-
-        if self._pending_params is not None:
-            self._start_reprocess_worker(*self._pending_params)
+    def _apply_pitch(self) -> None:
+        self.engine.semitones = float(self._semitones_spin.value())
+        self.engine.cents = float(self._cents_spin.value())
 
     # ------------------------------------------------------------------
     # Helpers

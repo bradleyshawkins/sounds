@@ -7,8 +7,8 @@ requires-python = ">=3.12"
 dependencies = [
     "librosa>=0.10",
     "numpy>=2.0",
+    "pylibrb>=0.1.2",
     "PyQt6>=6.7",
-    "pyrubberband>=0.3",
     "sounddevice>=0.5",
     "soundfile>=0.12",
     "yt-dlp>=2024.1",

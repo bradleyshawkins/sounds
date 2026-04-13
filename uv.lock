@@ -541,6 +541,21 @@ wheels = [
 ]
 
 [[package]]
+name = "pylibrb"
+version = "0.1.2"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "numpy" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/c9/96/4ed0cedacc7763c11b44a238240ae037f2290120fd619039aadff466a02d/pylibrb-0.1.2.tar.gz", hash = "sha256:206b5857dd4d073d7bc87a4aeb22d7d235e671b8256c999c41ffbe098228a3ba", size = 33254, upload-time = "2023-12-03T22:11:00.74Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/ec/32/1afbc08d701bce9b36f50825f3cb9028b0cee1f0caacd0342cbcf4bb3b13/pylibrb-0.1.2-cp312-abi3-macosx_10_14_x86_64.whl", hash = "sha256:24bd04333ca0e8a08f6763de16c3932adb1d45ff8b07103c388322b8e3a4bc98", size = 1600432, upload-time = "2023-12-03T22:10:41.878Z" },
+    { url = "https://files.pythonhosted.org/packages/f6/44/09da209c85c1a669d0947dca139d116c78fe452b9bcbc3c64bc3972f729a/pylibrb-0.1.2-cp312-abi3-macosx_11_0_arm64.whl", hash = "sha256:60380fd59fb286700d3f950e9db6388cee1b27a1ab27a1c6ee8e509fd9cd68cf", size = 1578248, upload-time = "2023-12-03T22:10:43.839Z" },
+    { url = "https://files.pythonhosted.org/packages/fc/dc/6611dd8376ffcb388d53cc9f3c05417091e74e828b2b3e04ec08cfaa2445/pylibrb-0.1.2-cp312-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:7088cb716fe07540f28bd26bf11315eec73fe6578a7d1d7d55d07019190098df", size = 2168347, upload-time = "2023-12-03T22:10:45.164Z" },
+    { url = "https://files.pythonhosted.org/packages/f8/e0/5cbac14c76f8e3cf151c2b6444fe340eeaf9f3097016a5ad205bbc4e753f/pylibrb-0.1.2-cp312-abi3-win_amd64.whl", hash = "sha256:8ab810bd58581da194b4c4bfb8883033dc122a63842ba8d27e2faad084761fe6", size = 1982171, upload-time = "2023-12-03T22:10:47.007Z" },
+]
+
+[[package]]
 name = "pyqt6"
 version = "6.10.2"
 source = { registry = "https://pypi.org/simple" }
@@ -591,19 +606,6 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/98/f4/886f901f1e04da717a11e180ba19a9c7fc62da170966d57206006f173bda/pyqt6_sip-13.11.1-cp314-cp314-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:fcadd68e09ee24cdda8f8bfcba52e59c9b297055d2c450f0eb89afa61a8dc31a", size = 321846, upload-time = "2026-03-09T13:01:29.817Z" },
     { url = "https://files.pythonhosted.org/packages/96/f2/b68fd566f7f86dbb53d933489e70487cabaea0e0161690e4899653bbc7fb/pyqt6_sip-13.11.1-cp314-cp314-win_amd64.whl", hash = "sha256:581e287bf42587593b88b30d9db06ed0fccbf40f345a5bd3ec3f00a5692e2430", size = 55055, upload-time = "2026-03-09T13:01:33.467Z" },
     { url = "https://files.pythonhosted.org/packages/8d/42/efb7ced69f7d1d31eb8f19b2d778aeb182be7e070569d02b9057ac478e3e/pyqt6_sip-13.11.1-cp314-cp314-win_arm64.whl", hash = "sha256:42b62530a9b6a9c6e29c2941b8ab78258652da0aeae4eb1fc9a0631d19a7a7b2", size = 49597, upload-time = "2026-03-09T13:01:34.49Z" },
-]
-
-[[package]]
-name = "pyrubberband"
-version = "0.4.0"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "numpy" },
-    { name = "soundfile" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/b4/5f/e4e737a216c9327931cdee8ca2194c916ee8a1748a8c7c80d5d5a8368d81/pyrubberband-0.4.0.tar.gz", hash = "sha256:74707ec8ca6c6234e84ad2d9a4aa5c08a62fcfd83da011d535d41f4388ac49f7", size = 6416, upload-time = "2024-09-30T17:53:00.796Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/d8/88/238aa67e353012d8dd999372aedada3f627bc9895d5d2a5305e7ffb1affd/pyrubberband-0.4.0-py3-none-any.whl", hash = "sha256:0a803191f38debbbdfd9135939c1f75999e98511f19867d357b84e191f139ca9", size = 4798, upload-time = "2024-09-30T17:52:59.621Z" },
 ]
 
 [[package]]
@@ -786,8 +788,8 @@ source = { editable = "." }
 dependencies = [
     { name = "librosa" },
     { name = "numpy" },
+    { name = "pylibrb" },
     { name = "pyqt6" },
-    { name = "pyrubberband" },
     { name = "sounddevice" },
     { name = "soundfile" },
     { name = "yt-dlp" },
@@ -802,8 +804,8 @@ dev = [
 requires-dist = [
     { name = "librosa", specifier = ">=0.10" },
     { name = "numpy", specifier = ">=2.0" },
+    { name = "pylibrb", specifier = ">=0.1.2" },
     { name = "pyqt6", specifier = ">=6.7" },
-    { name = "pyrubberband", specifier = ">=0.3" },
     { name = "sounddevice", specifier = ">=0.5" },
     { name = "soundfile", specifier = ">=0.12" },
     { name = "yt-dlp", specifier = ">=2024.1" },
