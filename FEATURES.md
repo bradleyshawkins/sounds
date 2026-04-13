@@ -18,7 +18,7 @@
 - [x] Read metadata from files on import (title, artist, album, year, genre) via mutagen
 - [x] SQLite database to store library and per-track data
   - [x] Track table: path, content hash, mtime, title, artist, album, duration
-  - [ ] Loops table: named, saveable A/B loops per track
+  - [x] Loops table: named, saveable A/B loops per track
   - [ ] Song structure table (for future AI detection results)
 - [x] Incremental re-scan — skip files whose mtime hasn't changed
 - [ ] File relink dialog — when a tracked file has moved, prompt to locate it

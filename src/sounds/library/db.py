@@ -44,6 +44,14 @@ class Database:
                 genre        TEXT,
                 duration     REAL
             );
+
+            CREATE TABLE IF NOT EXISTS loops (
+                id           INTEGER PRIMARY KEY,
+                track_id     INTEGER NOT NULL REFERENCES tracks(id) ON DELETE CASCADE,
+                name         TEXT NOT NULL,
+                start_sample INTEGER NOT NULL,
+                end_sample   INTEGER NOT NULL
+            );
         """)
         self._conn.commit()
 
@@ -91,6 +99,49 @@ class Database:
                 "duration": duration,
             },
         )
+        self._conn.commit()
+
+    def get_or_create_track(self, uri: str) -> int:
+        """Return the track id for uri, creating a minimal row if needed."""
+        row = self._conn.execute(
+            "SELECT id FROM tracks WHERE uri = ?", (uri,)
+        ).fetchone()
+        if row:
+            return row["id"]
+        cur = self._conn.execute(
+            "INSERT INTO tracks (uri) VALUES (?)", (uri,)
+        )
+        self._conn.commit()
+        return cur.lastrowid  # type: ignore[return-value]
+
+    def save_loop(
+        self, uri: str, name: str, start_sample: int, end_sample: int
+    ) -> int:
+        """Save a named loop for the track, returning the new loop id."""
+        track_id = self.get_or_create_track(uri)
+        cur = self._conn.execute(
+            "INSERT INTO loops (track_id, name, start_sample, end_sample) "
+            "VALUES (?, ?, ?, ?)",
+            (track_id, name, start_sample, end_sample),
+        )
+        self._conn.commit()
+        return cur.lastrowid  # type: ignore[return-value]
+
+    def get_loops(self, uri: str) -> list[sqlite3.Row]:
+        """Return all saved loops for a track, ordered by name."""
+        return self._conn.execute(
+            """
+            SELECT loops.id, loops.name, loops.start_sample, loops.end_sample
+            FROM loops
+            JOIN tracks ON tracks.id = loops.track_id
+            WHERE tracks.uri = ?
+            ORDER BY loops.name
+            """,
+            (uri,),
+        ).fetchall()
+
+    def delete_loop(self, loop_id: int) -> None:
+        self._conn.execute("DELETE FROM loops WHERE id = ?", (loop_id,))
         self._conn.commit()
 
     # ------------------------------------------------------------------

@@ -2,6 +2,7 @@ from pathlib import Path
 
 from PyQt6.QtCore import Qt, QThread, QTimer, pyqtSignal
 from PyQt6.QtWidgets import (
+    QComboBox,
     QDoubleSpinBox,
     QFileDialog,
     QGridLayout,
@@ -57,6 +58,7 @@ class MainWindow(QMainWindow):
         self._worker: _Worker | None = None
         self._db = Database()
         self._scanner: FolderScanner | None = None
+        self._current_uri: str | None = None
 
         # True while the user is dragging the seek bar so the position timer
         # doesn't fight the drag.
@@ -104,6 +106,7 @@ class MainWindow(QMainWindow):
         layout.addLayout(self._build_transport_row())
         layout.addLayout(self._build_seek_row())
         layout.addLayout(self._build_loop_row())
+        layout.addLayout(self._build_saved_loops_row())
         layout.addLayout(self._build_params_grid())
         layout.addStretch()
         splitter.addWidget(controls)
@@ -314,6 +317,10 @@ class MainWindow(QMainWindow):
         self._set_b_btn.setToolTip("Mark current position as loop end")
         self._set_b_btn.clicked.connect(self._on_set_loop_b)
 
+        self._save_loop_btn = QPushButton("Save…")
+        self._save_loop_btn.setToolTip("Save current A/B loop with a name")
+        self._save_loop_btn.clicked.connect(self._on_save_loop)
+
         row = QHBoxLayout()
         row.addWidget(self._loop_btn)
         row.addSpacing(8)
@@ -324,6 +331,26 @@ class MainWindow(QMainWindow):
         row.addWidget(QLabel("B:"))
         row.addWidget(self._loop_b_edit)
         row.addWidget(self._set_b_btn)
+        row.addSpacing(8)
+        row.addWidget(self._save_loop_btn)
+        row.addStretch()
+        return row
+
+    def _build_saved_loops_row(self) -> QHBoxLayout:
+        self._saved_loops_combo = QComboBox()
+        self._saved_loops_combo.setMinimumWidth(200)
+        self._saved_loops_combo.setPlaceholderText("Saved loops")
+        self._saved_loops_combo.currentIndexChanged.connect(self._on_saved_loop_selected)
+
+        self._delete_loop_btn = QPushButton("Delete")
+        self._delete_loop_btn.setToolTip("Delete the selected saved loop")
+        self._delete_loop_btn.clicked.connect(self._on_delete_loop)
+        self._delete_loop_btn.setEnabled(False)
+
+        row = QHBoxLayout()
+        row.addWidget(QLabel("Saved loops:"))
+        row.addWidget(self._saved_loops_combo)
+        row.addWidget(self._delete_loop_btn)
         row.addStretch()
         return row
 
@@ -354,6 +381,14 @@ class MainWindow(QMainWindow):
         self.engine.stop()
         self._position_timer.stop()
 
+        # Track URI for loop persistence (URLs treated as their string form)
+        if hasattr(source, "path"):
+            self._current_uri = source.path
+        elif hasattr(source, "url"):
+            self._current_uri = source.url
+        else:
+            self._current_uri = None
+
         worker = _Worker(lambda: self.engine.load(source))
         worker.finished.connect(self._on_load_done)
         worker.error.connect(self._on_worker_error)
@@ -370,6 +405,7 @@ class MainWindow(QMainWindow):
         self._seek_slider.setValue(0)
         self._update_position()
         self._position_timer.start()
+        self._reload_saved_loops()
 
     # ------------------------------------------------------------------
     # Library / scanning
@@ -441,6 +477,61 @@ class MainWindow(QMainWindow):
             else:
                 match = True
             self._library_table.setRowHidden(row, not match)
+
+    def _on_save_loop(self) -> None:
+        if self._current_uri is None:
+            return
+        if self._loop_start_samples is None or self._loop_end_samples is None:
+            QMessageBox.information(self, "No Loop Set", "Set both A and B points before saving.")
+            return
+        name, ok = QInputDialog.getText(self, "Save Loop", "Loop name:")
+        if not ok or not name.strip():
+            return
+        self._db.save_loop(
+            self._current_uri,
+            name.strip(),
+            self._loop_start_samples,
+            self._loop_end_samples,
+        )
+        self._reload_saved_loops()
+
+    def _reload_saved_loops(self) -> None:
+        self._saved_loops_combo.blockSignals(True)
+        self._saved_loops_combo.clear()
+        if self._current_uri:
+            for loop in self._db.get_loops(self._current_uri):
+                self._saved_loops_combo.addItem(
+                    loop["name"],
+                    userData=(loop["id"], loop["start_sample"], loop["end_sample"]),
+                )
+        has_loops = self._saved_loops_combo.count() > 0
+        self._delete_loop_btn.setEnabled(has_loops)
+        self._saved_loops_combo.blockSignals(False)
+
+    def _on_saved_loop_selected(self, index: int) -> None:
+        if index < 0:
+            return
+        data = self._saved_loops_combo.itemData(index)
+        if data is None:
+            return
+        _, start, end = data
+        self._loop_start_samples = start
+        self._loop_end_samples = end
+        self._loop_a_edit.setText(_fmt_time(start / self.engine._sample_rate))
+        self._loop_b_edit.setText(_fmt_time(end / self.engine._sample_rate))
+        self._loop_btn.setChecked(True)
+        self._update_engine_loop()
+
+    def _on_delete_loop(self) -> None:
+        index = self._saved_loops_combo.currentIndex()
+        if index < 0:
+            return
+        data = self._saved_loops_combo.itemData(index)
+        if data is None:
+            return
+        loop_id, _, _ = data
+        self._db.delete_loop(loop_id)
+        self._reload_saved_loops()
 
     def _on_library_double_click(self) -> None:
         row = self._library_table.currentRow()
@@ -648,6 +739,10 @@ class MainWindow(QMainWindow):
         self._loop_a_edit.setText("—")
         self._loop_b_edit.setText("—")
         self.engine.set_loop(None, None)
+        self._saved_loops_combo.blockSignals(True)
+        self._saved_loops_combo.clear()
+        self._saved_loops_combo.blockSignals(False)
+        self._delete_loop_btn.setEnabled(False)
 
     def _set_transport_enabled(self, enabled: bool) -> None:
         for w in (
