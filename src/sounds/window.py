@@ -14,7 +14,10 @@ from PyQt6.QtWidgets import (
     QPushButton,
     QSlider,
     QSpinBox,
+    QSplitter,
     QStatusBar,
+    QTableWidget,
+    QTableWidgetItem,
     QVBoxLayout,
     QWidget,
 )
@@ -22,6 +25,8 @@ from PyQt6.QtWidgets import (
 from sounds.engine.player import PlaybackEngine
 from sounds.engine.sources.file import FileSource
 from sounds.engine.sources.url import URLSource
+from sounds.library.db import Database
+from sounds.library.scanner import FolderScanner
 
 
 def _fmt_time(seconds: float) -> str:
@@ -50,6 +55,8 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.engine = PlaybackEngine()
         self._worker: _Worker | None = None
+        self._db = Database()
+        self._scanner: FolderScanner | None = None
 
         # True while the user is dragging the seek bar so the position timer
         # doesn't fight the drag.
@@ -76,6 +83,7 @@ class MainWindow(QMainWindow):
 
         self._build_ui()
         self._set_transport_enabled(False)
+        self._reload_library()
 
     # ------------------------------------------------------------------
     # UI construction
@@ -83,19 +91,29 @@ class MainWindow(QMainWindow):
 
     def _build_ui(self) -> None:
         self.setWindowTitle("Sounds")
-        self.setMinimumWidth(540)
+        self.setMinimumWidth(600)
+        self.resize(800, 640)
 
-        root = QWidget()
-        self.setCentralWidget(root)
-        layout = QVBoxLayout(root)
+        splitter = QSplitter(Qt.Orientation.Vertical)
+
+        # Top pane — controls
+        controls = QWidget()
+        layout = QVBoxLayout(controls)
         layout.setSpacing(10)
-
         layout.addLayout(self._build_file_row())
         layout.addLayout(self._build_transport_row())
         layout.addLayout(self._build_seek_row())
         layout.addLayout(self._build_loop_row())
         layout.addLayout(self._build_params_grid())
         layout.addStretch()
+        splitter.addWidget(controls)
+
+        # Bottom pane — library
+        splitter.addWidget(self._build_library_panel())
+        splitter.setStretchFactor(0, 0)  # controls: fixed
+        splitter.setStretchFactor(1, 1)  # library: grows
+
+        self.setCentralWidget(splitter)
 
         self._status = QStatusBar()
         self.setStatusBar(self._status)
@@ -104,10 +122,13 @@ class MainWindow(QMainWindow):
         row = QHBoxLayout()
         self._open_btn = QPushButton("Open File…")
         self._url_btn = QPushButton("Open URL…")
+        self._scan_btn = QPushButton("Scan Folder…")
         self._open_btn.clicked.connect(self._open_file)
         self._url_btn.clicked.connect(self._open_url)
+        self._scan_btn.clicked.connect(self._scan_folder)
         row.addWidget(self._open_btn)
         row.addWidget(self._url_btn)
+        row.addWidget(self._scan_btn)
         row.addStretch()
         return row
 
@@ -238,6 +259,28 @@ class MainWindow(QMainWindow):
 
         return grid
 
+    def _build_library_panel(self) -> QWidget:
+        panel = QWidget()
+        layout = QVBoxLayout(panel)
+        layout.setContentsMargins(0, 0, 0, 0)
+
+        self._library_table = QTableWidget(0, 5)
+        self._library_table.setHorizontalHeaderLabels(
+            ["Title", "Artist", "Album", "Duration", "Path"]
+        )
+        self._library_table.horizontalHeader().setStretchLastSection(True)
+        self._library_table.setSelectionBehavior(
+            QTableWidget.SelectionBehavior.SelectRows
+        )
+        self._library_table.setEditTriggers(
+            QTableWidget.EditTrigger.NoEditTriggers
+        )
+        self._library_table.setSortingEnabled(True)
+        self._library_table.doubleClicked.connect(self._on_library_double_click)
+        layout.addWidget(self._library_table)
+
+        return panel
+
     def _build_loop_row(self) -> QHBoxLayout:
         self._loop_btn = QPushButton("⟲ Loop")
         self._loop_btn.setCheckable(True)
@@ -320,6 +363,72 @@ class MainWindow(QMainWindow):
         self._seek_slider.setValue(0)
         self._update_position()
         self._position_timer.start()
+
+    # ------------------------------------------------------------------
+    # Library / scanning
+    # ------------------------------------------------------------------
+
+    def _scan_folder(self) -> None:
+        folder = QFileDialog.getExistingDirectory(
+            self, "Select Folder to Scan", self._last_dir
+        )
+        if not folder:
+            return
+        self._last_dir = folder
+        self._scan_btn.setEnabled(False)
+        self._status.showMessage("Scanning…")
+
+        self._scanner = FolderScanner(folder, self._db)
+        self._scanner.progress.connect(self._on_scan_progress)
+        self._scanner.finished.connect(self._on_scan_finished)
+        self._scanner.error.connect(self._on_scan_error)
+        self._scanner.start()
+
+    def _on_scan_progress(self, current: int, total: int, filename: str) -> None:
+        self._status.showMessage(f"Scanning {current}/{total} — {filename}")
+
+    def _on_scan_finished(self, added: int, skipped: int) -> None:
+        self._scan_btn.setEnabled(True)
+        self._status.showMessage(
+            f"Scan complete — {added} added/updated, {skipped} unchanged"
+        )
+        self._reload_library()
+
+    def _on_scan_error(self, msg: str) -> None:
+        self._scan_btn.setEnabled(True)
+        QMessageBox.critical(self, "Scan Error", msg)
+
+    def _reload_library(self) -> None:
+        tracks = self._db.all_tracks()
+        self._library_table.setSortingEnabled(False)
+        self._library_table.setRowCount(len(tracks))
+        for row, track in enumerate(tracks):
+            duration = (
+                _fmt_time(track["duration"]) if track["duration"] else ""
+            )
+            for col, value in enumerate([
+                track["title"] or "",
+                track["artist"] or "",
+                track["album"] or "",
+                duration,
+                track["uri"],
+            ]):
+                item = QTableWidgetItem(value)
+                item.setToolTip(track["uri"])
+                self._library_table.setItem(row, col, item)
+        self._library_table.setSortingEnabled(True)
+        self._library_table.resizeColumnToContents(0)
+        self._library_table.resizeColumnToContents(1)
+        self._library_table.resizeColumnToContents(2)
+        self._library_table.resizeColumnToContents(3)
+
+    def _on_library_double_click(self) -> None:
+        row = self._library_table.currentRow()
+        if row < 0:
+            return
+        path_item = self._library_table.item(row, 4)
+        if path_item:
+            self._load_source(FileSource(path_item.text()))
 
     # ------------------------------------------------------------------
     # Transport
@@ -555,4 +664,5 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event) -> None:
         self.engine.stop()
+        self._db.close()
         super().closeEvent(event)

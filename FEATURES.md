@@ -14,13 +14,13 @@
 - [ ] Keyboard shortcuts, fully customizable
 
 ## Library & File Management
-- [ ] Recursive folder scan — import all audio files from a folder and subfolders
-- [ ] Read metadata from files on import (title, artist, album, year, genre, BPM, key) via mutagen
-- [ ] SQLite database to store library, loop points, and per-track data
-  - [ ] Track table: path, content hash, mtime, title, artist, album, duration
+- [x] Recursive folder scan — import all audio files from a folder and subfolders
+- [x] Read metadata from files on import (title, artist, album, year, genre) via mutagen
+- [x] SQLite database to store library and per-track data
+  - [x] Track table: path, content hash, mtime, title, artist, album, duration
   - [ ] Loops table: named, saveable A/B loops per track
   - [ ] Song structure table (for future AI detection results)
-- [ ] Incremental re-scan — skip files whose mtime hasn't changed
+- [x] Incremental re-scan — skip files whose mtime hasn't changed
 - [ ] File relink dialog — when a tracked file has moved, prompt to locate it
   - [ ] Silent fallback: try filename + duration match, then content hash match before prompting
 - [ ] Three-panel library UI — Artist/Album tree → track list → player
