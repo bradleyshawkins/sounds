@@ -663,6 +663,6 @@ class MainWindow(QMainWindow):
         QMessageBox.critical(self, "Error", msg)
 
     def closeEvent(self, event) -> None:
-        self.engine.stop()
+        self.engine.close()
         self._db.close()
         super().closeEvent(event)

@@ -179,6 +179,11 @@ class PlaybackEngine:
     def _raw_samples(self) -> int:
         return self._raw.shape[0] if self._raw is not None else 0
 
+    def close(self) -> None:
+        """Release resources. Call before the application exits."""
+        self.stop()
+        self._stretcher = None
+
     def duration_seconds(self) -> float:
         """Duration of the original (unmodified) audio in seconds."""
         return self._raw_samples / self._sample_rate if self._sample_rate else 0.0
