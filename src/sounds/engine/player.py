@@ -5,8 +5,16 @@ Architecture
 RubberBandStretcher runs in real-time mode, consuming raw audio chunks
 on the fly and producing stretched/pitch-shifted output without any
 pre-processing step. Playback begins instantly when play() is called.
-Speed and pitch changes take effect within one chunk (~93 ms at 44 kHz)
-with no pause or reprocess step.
+
+The OutputStream uses a callback driven by the audio hardware. Every
+~93 ms the driver calls _audio_callback on a dedicated high-priority
+thread asking for the next buffer of samples. The callback pulls from
+_output_queue; when the queue is empty it returns silence. The stream
+runs for the lifetime of a loaded file and is never stopped — avoiding
+the CoreAudio hardware click that occurs on macOS when a stream starts
+or stops.
+
+   Producer thread (_run) → _output_queue → _audio_callback → hardware
 
 Array shape convention
 ----------------------
@@ -20,6 +28,7 @@ Position is tracked in *input* sample space (the raw, unmodified audio)
 so that loop points and seek operations remain stable across speed changes.
 """
 
+import queue
 import threading
 
 import numpy as np
@@ -35,6 +44,7 @@ class PlaybackEngine:
     def __init__(self) -> None:
         self._raw: np.ndarray | None = None  # (samples, channels) float32
         self._sample_rate: int = 44100
+        self._channels: int = 2
 
         # Current position and loop points in *input* sample space.
         self._input_pos: int = 0
@@ -50,12 +60,18 @@ class PlaybackEngine:
         self._thread: threading.Thread | None = None
         self._lock = threading.Lock()
 
-        # Stretcher created when audio is loaded and reused across play/pause
-        # cycles. Setting time_ratio / pitch_scale takes effect immediately.
+        # Stretcher created on load, reused across play/pause cycles.
         self._stretcher: RubberBandStretcher | None = None
 
-        # Set by seek() to signal the playback thread to reset the stretcher
-        # buffer so stale pre-seek audio is not heard.
+        # Output pipeline: producer → queue → callback → hardware.
+        # _cb_leftover holds samples that didn't fit in the previous callback
+        # invocation (stretcher output is variable-size; callback blocksize is fixed).
+        self._output_queue: queue.Queue[np.ndarray] = queue.Queue(maxsize=4)
+        self._cb_leftover: np.ndarray | None = None
+
+        self._stream: sd.OutputStream | None = None
+
+        # Set by seek() to signal the playback thread to reset the stretcher.
         self._seek_event = threading.Event()
 
     # ------------------------------------------------------------------
@@ -69,10 +85,12 @@ class PlaybackEngine:
         with self._lock:
             self._raw = audio
             self._sample_rate = sr
+            self._channels = audio.shape[1]
             self._input_pos = 0
             self._loop_start = None
             self._loop_end = None
         self._stretcher = self._make_stretcher(audio.shape[1])
+        self._open_stream(audio.shape[1])
 
     # ------------------------------------------------------------------
     # Parameters — changes take effect within one chunk, no reprocessing
@@ -148,13 +166,12 @@ class PlaybackEngine:
         if self._thread:
             self._thread.join(timeout=2.0)
             self._thread = None
+        # Discard buffered audio so the callback falls silent immediately.
+        self._flush_queue()
 
     def stop(self) -> None:
         """Stop playback and reset position to the beginning."""
-        self._playing = False
-        if self._thread:
-            self._thread.join(timeout=2.0)
-            self._thread = None
+        self.pause()
         with self._lock:
             self._input_pos = 0
 
@@ -162,7 +179,6 @@ class PlaybackEngine:
         """Seek to a position given in input (raw) sample space."""
         with self._lock:
             self._input_pos = max(0, min(input_sample, self._raw_samples))
-        # Signal the playback thread to flush stale stretcher buffer.
         self._seek_event.set()
 
     def set_loop(self, start: int | None, end: int | None) -> None:
@@ -182,6 +198,10 @@ class PlaybackEngine:
     def close(self) -> None:
         """Release resources. Call before the application exits."""
         self.stop()
+        if self._stream is not None:
+            self._stream.stop()
+            self._stream.close()
+            self._stream = None
         self._stretcher = None
 
     def duration_seconds(self) -> float:
@@ -196,8 +216,68 @@ class PlaybackEngine:
     # Internal
     # ------------------------------------------------------------------
 
+    def _flush_queue(self) -> None:
+        """Discard all buffered audio (queue + callback carry-over)."""
+        self._cb_leftover = None
+        while not self._output_queue.empty():
+            try:
+                self._output_queue.get_nowait()
+            except queue.Empty:
+                break
+
+    def _open_stream(self, channels: int) -> None:
+        """(Re)open the persistent callback stream."""
+        self._flush_queue()
+        if self._stream is not None:
+            self._stream.stop()
+            self._stream.close()
+        self._stream = sd.OutputStream(
+            samplerate=self._sample_rate,
+            channels=channels,
+            blocksize=CHUNK_SIZE,
+            dtype="float32",
+            callback=self._audio_callback,
+        )
+        self._stream.start()
+
+    def _audio_callback(
+        self,
+        outdata: np.ndarray,
+        frames: int,
+        _time,  # noqa: ANN001 — CData type from cffi, not annotatable
+        _status: sd.CallbackFlags,
+    ) -> None:
+        """Audio driver callback — runs on a dedicated high-priority thread.
+
+        Pulls samples from _output_queue to fill outdata. Writes silence
+        when the queue is empty (paused / stopped / end of track).
+        Handles variable-size chunks via _cb_leftover carry-over.
+        """
+        filled = 0
+
+        # Drain carry-over from the previous callback invocation first.
+        if self._cb_leftover is not None:
+            take = min(len(self._cb_leftover), frames)
+            outdata[:take] = self._cb_leftover[:take]
+            filled = take
+            remainder = self._cb_leftover[take:]
+            self._cb_leftover = remainder if len(remainder) else None
+
+        # Pull further chunks from the queue as needed.
+        while filled < frames:
+            try:
+                chunk = self._output_queue.get_nowait()
+            except queue.Empty:
+                outdata[filled:] = 0
+                return
+
+            take = min(len(chunk), frames - filled)
+            outdata[filled : filled + take] = chunk[:take]
+            filled += take
+            if take < len(chunk):
+                self._cb_leftover = chunk[take:]
+
     def _make_stretcher(self, channels: int) -> RubberBandStretcher:
-        """Create a fresh real-time stretcher with the current parameters."""
         s = RubberBandStretcher(
             sample_rate=self._sample_rate,
             channels=channels,
@@ -209,7 +289,7 @@ class PlaybackEngine:
         return s
 
     def _run(self) -> None:
-        """Playback thread: streams raw audio through RubberBandStretcher."""
+        """Producer thread: stretches audio and enqueues it for output."""
         assert self._raw is not None
         assert self._stretcher is not None
 
@@ -217,53 +297,42 @@ class PlaybackEngine:
         stretcher.reset()
         self._seek_event.clear()
 
-        with sd.OutputStream(
-            samplerate=self._sample_rate,
-            channels=self._raw.shape[1],
-            dtype="float32",
-        ) as stream:
-            while self._playing:
-                # If a seek happened, reset the stretcher to flush its buffer
-                # so we don't hear pre-seek audio at the new position.
-                if self._seek_event.is_set():
-                    self._seek_event.clear()
+        while self._playing:
+            if self._seek_event.is_set():
+                self._seek_event.clear()
+                stretcher.reset()
+
+            with self._lock:
+                pos = self._input_pos
+                loop_start = self._loop_start
+                loop_end = (
+                    self._loop_end
+                    if self._loop_end is not None
+                    else self._raw_samples
+                )
+
+            if pos >= loop_end:
+                if loop_start is not None:
+                    with self._lock:
+                        self._input_pos = loop_start
                     stretcher.reset()
+                    continue
+                else:
+                    with self._lock:
+                        self._input_pos = 0
+                    self._playing = False
+                    break
 
-                with self._lock:
-                    pos = self._input_pos
-                    loop_start = self._loop_start
-                    loop_end = (
-                        self._loop_end
-                        if self._loop_end is not None
-                        else self._raw_samples
-                    )
+            chunk_end = min(pos + CHUNK_SIZE, loop_end)
+            chunk = self._raw[pos:chunk_end, :]
+            stretcher.process(chunk.T)
 
-                if pos >= loop_end:
-                    if loop_start is not None:
-                        with self._lock:
-                            self._input_pos = loop_start
-                        stretcher.reset()
-                        continue
-                    else:
-                        with self._lock:
-                            self._input_pos = 0
-                        self._playing = False
-                        break
+            out = stretcher.retrieve_available()
+            if out.shape[1] > 0:
+                audio = np.ascontiguousarray(out.T)
+                if self._volume != 1.0:
+                    audio = audio * self._volume
+                self._output_queue.put(audio)
 
-                chunk_end = min(pos + CHUNK_SIZE, loop_end)
-                chunk = self._raw[pos:chunk_end, :]  # (samples, channels)
-
-                # pylibrb expects (channels, samples); chunk.T is accepted even
-                # when Fortran-contiguous.
-                stretcher.process(chunk.T)
-
-                out = stretcher.retrieve_available()  # (channels, samples)
-                if out.shape[1] > 0:
-                    # sounddevice expects (samples, channels), C-contiguous.
-                    audio = np.ascontiguousarray(out.T)
-                    if self._volume != 1.0:
-                        audio = audio * self._volume
-                    stream.write(audio)
-
-                with self._lock:
-                    self._input_pos = chunk_end
+            with self._lock:
+                self._input_pos = chunk_end

@@ -553,7 +553,7 @@ class MainWindow(QMainWindow):
         self._sync_play_btn()
 
     def _on_stop(self) -> None:
-        self.engine.pause()
+        self.engine.stop()
         self._sync_play_btn()
 
     def _sync_play_btn(self) -> None:
