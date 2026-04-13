@@ -44,6 +44,7 @@ class PlaybackEngine:
         self._speed: float = 1.0
         self._semitones: float = 0.0
         self._cents: float = 0.0
+        self._volume: float = 1.0
 
         self._playing: bool = False
         self._thread: threading.Thread | None = None
@@ -83,7 +84,7 @@ class PlaybackEngine:
 
     @speed.setter
     def speed(self, value: float) -> None:
-        self._speed = max(0.1, min(2.0, value))
+        self._speed = max(0.1, min(1.9, value))
         if self._stretcher is not None:
             self._stretcher.time_ratio = 1.0 / self._speed
 
@@ -111,6 +112,14 @@ class PlaybackEngine:
     def total_semitones(self) -> float:
         """Combined pitch shift in semitones (semitones + cents/100)."""
         return self._semitones + self._cents / 100.0
+
+    @property
+    def volume(self) -> float:
+        return self._volume
+
+    @volume.setter
+    def volume(self, value: float) -> None:
+        self._volume = max(0.0, min(1.0, value))
 
     def set_params(self, speed: float, semitones: float, cents: float) -> None:
         """Set all playback parameters at once."""
@@ -246,9 +255,10 @@ class PlaybackEngine:
                 out = stretcher.retrieve_available()  # (channels, samples)
                 if out.shape[1] > 0:
                     # sounddevice expects (samples, channels), C-contiguous.
-                    stream.write(np.ascontiguousarray(out.T))
+                    audio = np.ascontiguousarray(out.T)
+                    if self._volume != 1.0:
+                        audio = audio * self._volume
+                    stream.write(audio)
 
                 with self._lock:
                     self._input_pos = chunk_end
-
-        self._stretcher = None

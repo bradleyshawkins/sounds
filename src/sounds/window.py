@@ -4,6 +4,7 @@ from PyQt6.QtCore import Qt, QThread, QTimer, pyqtSignal
 from PyQt6.QtWidgets import (
     QDoubleSpinBox,
     QFileDialog,
+    QGridLayout,
     QHBoxLayout,
     QInputDialog,
     QLabel,
@@ -93,8 +94,7 @@ class MainWindow(QMainWindow):
         layout.addLayout(self._build_transport_row())
         layout.addLayout(self._build_seek_row())
         layout.addLayout(self._build_loop_row())
-        layout.addLayout(self._build_speed_row())
-        layout.addLayout(self._build_pitch_row())
+        layout.addLayout(self._build_params_grid())
         layout.addStretch()
 
         self._status = QStatusBar()
@@ -153,56 +153,90 @@ class MainWindow(QMainWindow):
         row.addWidget(self._dur_label)
         return row
 
-    def _build_speed_row(self) -> QHBoxLayout:
-        row = QHBoxLayout()
-        row.addWidget(QLabel("Speed:"))
+    def _build_params_grid(self) -> QGridLayout:
+        """Speed, Semitones, Cents, and Volume rows in a shared grid so all
+        sliders are left-aligned and the same width regardless of label length."""
+        grid = QGridLayout()
+        grid.setColumnStretch(1, 1)  # slider column grows to fill available width
 
+        # --- Speed ---
         self._speed_slider = QSlider(Qt.Orientation.Horizontal)
-        self._speed_slider.setRange(10, 200)   # 0.10× – 2.00×
+        self._speed_slider.setRange(10, 190)
         self._speed_slider.setValue(100)
         self._speed_slider.setTickInterval(10)
         self._speed_slider.setTickPosition(QSlider.TickPosition.TicksBelow)
-        # valueChanged keeps the spinbox in sync while dragging; the speed is
-        # applied on sliderReleased (once, when mouse lifts).
         self._speed_slider.valueChanged.connect(self._on_speed_slider_moved)
         self._speed_slider.sliderReleased.connect(self._apply_speed)
 
         self._speed_spin = QDoubleSpinBox()
-        self._speed_spin.setRange(0.10, 2.00)
+        self._speed_spin.setRange(0.10, 1.90)
         self._speed_spin.setSingleStep(0.01)
         self._speed_spin.setDecimals(2)
         self._speed_spin.setValue(1.00)
         self._speed_spin.setSuffix("×")
         self._speed_spin.setFixedWidth(80)
-        # editingFinished fires when the user presses Enter or leaves the box.
         self._speed_spin.editingFinished.connect(self._on_speed_spin_edited)
 
-        row.addWidget(self._speed_slider)
-        row.addWidget(self._speed_spin)
-        return row
+        grid.addWidget(QLabel("Speed:"), 0, 0)
+        grid.addWidget(self._speed_slider, 0, 1)
+        grid.addWidget(self._speed_spin, 0, 2)
 
-    def _build_pitch_row(self) -> QHBoxLayout:
-        row = QHBoxLayout()
-        row.addWidget(QLabel("Pitch:"))
+        # --- Semitones ---
+        self._semitones_slider = QSlider(Qt.Orientation.Horizontal)
+        self._semitones_slider.setRange(-24, 24)
+        self._semitones_slider.setValue(0)
+        self._semitones_slider.setTickInterval(6)
+        self._semitones_slider.setTickPosition(QSlider.TickPosition.TicksBelow)
+        self._semitones_slider.valueChanged.connect(self._on_semitones_slider_moved)
+        self._semitones_slider.sliderReleased.connect(self._apply_pitch)
 
         self._semitones_spin = QSpinBox()
         self._semitones_spin.setRange(-24, 24)
         self._semitones_spin.setValue(0)
         self._semitones_spin.setSuffix(" st")
         self._semitones_spin.setToolTip("Semitones (±24)")
-        self._semitones_spin.valueChanged.connect(self._on_pitch_changed)
+        self._semitones_spin.valueChanged.connect(self._on_semitones_spin_changed)
+
+        grid.addWidget(QLabel("Semitones:"), 1, 0)
+        grid.addWidget(self._semitones_slider, 1, 1)
+        grid.addWidget(self._semitones_spin, 1, 2)
+
+        # --- Cents ---
+        self._cents_slider = QSlider(Qt.Orientation.Horizontal)
+        self._cents_slider.setRange(-100, 100)
+        self._cents_slider.setValue(0)
+        self._cents_slider.setTickInterval(25)
+        self._cents_slider.setTickPosition(QSlider.TickPosition.TicksBelow)
+        self._cents_slider.valueChanged.connect(self._on_cents_slider_moved)
+        self._cents_slider.sliderReleased.connect(self._apply_pitch)
 
         self._cents_spin = QSpinBox()
         self._cents_spin.setRange(-100, 100)
         self._cents_spin.setValue(0)
         self._cents_spin.setSuffix(" ct")
         self._cents_spin.setToolTip("Fine tuning in cents (±100)")
-        self._cents_spin.valueChanged.connect(self._on_pitch_changed)
+        self._cents_spin.valueChanged.connect(self._on_cents_spin_changed)
 
-        row.addWidget(self._semitones_spin)
-        row.addWidget(self._cents_spin)
-        row.addStretch()
-        return row
+        grid.addWidget(QLabel("Cents:"), 2, 0)
+        grid.addWidget(self._cents_slider, 2, 1)
+        grid.addWidget(self._cents_spin, 2, 2)
+
+        # --- Volume ---
+        self._volume_slider = QSlider(Qt.Orientation.Horizontal)
+        self._volume_slider.setRange(0, 100)
+        self._volume_slider.setValue(100)
+        self._volume_slider.setTickInterval(25)
+        self._volume_slider.setTickPosition(QSlider.TickPosition.TicksBelow)
+        self._volume_slider.valueChanged.connect(self._on_volume_changed)
+
+        self._volume_label = QLabel("100%")
+        self._volume_label.setFixedWidth(40)
+
+        grid.addWidget(QLabel("Volume:"), 3, 0)
+        grid.addWidget(self._volume_slider, 3, 1)
+        grid.addWidget(self._volume_label, 3, 2)
+
+        return grid
 
     def _build_loop_row(self) -> QHBoxLayout:
         self._loop_btn = QPushButton("⟲ Loop")
@@ -370,8 +404,33 @@ class MainWindow(QMainWindow):
         self._speed_slider.blockSignals(False)
         self._apply_speed()
 
-    def _on_pitch_changed(self) -> None:
-        self._pitch_timer.start()  # resets the 200 ms countdown
+    def _on_semitones_slider_moved(self, value: int) -> None:
+        self._semitones_spin.blockSignals(True)
+        self._semitones_spin.setValue(value)
+        self._semitones_spin.blockSignals(False)
+        self._pitch_timer.start()
+
+    def _on_semitones_spin_changed(self, value: int) -> None:
+        self._semitones_slider.blockSignals(True)
+        self._semitones_slider.setValue(value)
+        self._semitones_slider.blockSignals(False)
+        self._pitch_timer.start()
+
+    def _on_cents_slider_moved(self, value: int) -> None:
+        self._cents_spin.blockSignals(True)
+        self._cents_spin.setValue(value)
+        self._cents_spin.blockSignals(False)
+        self._pitch_timer.start()
+
+    def _on_cents_spin_changed(self, value: int) -> None:
+        self._cents_slider.blockSignals(True)
+        self._cents_slider.setValue(value)
+        self._cents_slider.blockSignals(False)
+        self._pitch_timer.start()
+
+    def _on_volume_changed(self, value: int) -> None:
+        self._volume_label.setText(f"{value}%")
+        self.engine.volume = value / 100.0
 
     def _apply_speed(self) -> None:
         self.engine.speed = self._speed_slider.value() / 100.0
@@ -480,7 +539,9 @@ class MainWindow(QMainWindow):
             self._url_btn,
             self._speed_slider,
             self._speed_spin,
+            self._semitones_slider,
             self._semitones_spin,
+            self._cents_slider,
             self._cents_spin,
         ):
             w.setEnabled(not loading)
