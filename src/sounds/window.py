@@ -29,6 +29,7 @@ from sounds.engine.sources.file import FileSource
 from sounds.engine.sources.url import URLSource
 from sounds.library.db import Database
 from sounds.library.scanner import FolderScanner
+from sounds.ui.section_bar import SectionBar
 from sounds.ui.seek_bar import SeekBar
 
 
@@ -107,6 +108,8 @@ class MainWindow(QMainWindow):
         layout.setSpacing(10)
         layout.addLayout(self._build_file_row())
         layout.addLayout(self._build_transport_row())
+        self._section_bar = self._build_section_bar()
+        layout.addWidget(self._section_bar)
         layout.addLayout(self._build_seek_row())
         layout.addLayout(self._build_loop_row())
         layout.addLayout(self._build_saved_loops_row())
@@ -151,14 +154,24 @@ class MainWindow(QMainWindow):
         self._stop_btn.clicked.connect(self._on_stop)
         self._analyze_btn.clicked.connect(self._on_analyze)
         self._position_label = QLabel("0:00 / 0:00")
+        self._section_label = QLabel("")
+        self._section_label.setStyleSheet("color: #aaaaaa; font-style: italic;")
         row.addWidget(self._play_btn)
         row.addWidget(self._stop_btn)
         row.addSpacing(8)
         row.addWidget(self._analyze_btn)
         row.addSpacing(8)
         row.addWidget(self._position_label)
+        row.addSpacing(12)
+        row.addWidget(self._section_label)
         row.addStretch()
         return row
+
+    def _build_section_bar(self) -> SectionBar:
+        bar = SectionBar()
+        bar.section_looped.connect(self._on_section_looped)
+        bar.sections_changed.connect(self._on_sections_changed)
+        return bar
 
     def _build_seek_row(self) -> QHBoxLayout:
         self._seek_bar = SeekBar()
@@ -406,6 +419,7 @@ class MainWindow(QMainWindow):
     def _on_load_done(self) -> None:
         self._set_loading(False)
         self._set_transport_enabled(True)
+        self._section_bar.set_sample_rate(self.engine._sample_rate)
         self._reset_loop()
         dur = _fmt_time(self.engine.duration_seconds())
         self._dur_label.setText(dur)
@@ -457,6 +471,16 @@ class MainWindow(QMainWindow):
     def _on_analyze(self) -> None:
         if self.engine._raw is None:
             return
+        if self._section_bar.sections():
+            reply = QMessageBox.question(
+                self,
+                "Re-analyze",
+                "This track already has sections. Replace them with a fresh analysis?\n\n"
+                "Any renames or boundary adjustments you've made will be lost.",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            )
+            if reply != QMessageBox.StandardButton.Yes:
+                return
         self._analyze_btn.setEnabled(False)
         self._status.showMessage("Analyzing structure…")
         self._analyzer = StructureAnalyzer(self.engine._raw, self.engine._sample_rate)
@@ -466,9 +490,9 @@ class MainWindow(QMainWindow):
 
     def _on_analysis_done(self, sections: list) -> None:
         self._analyze_btn.setEnabled(True)
+        self._section_bar.set_sections(sections)
         if self._current_uri:
             self._db.save_sections(self._current_uri, sections)
-        self._seek_bar.set_sections(sections)
         self._status.showMessage(f"Found {len(sections)} sections")
 
     def _on_analysis_error(self, msg: str) -> None:
@@ -477,12 +501,13 @@ class MainWindow(QMainWindow):
         QMessageBox.critical(self, "Analysis Error", msg)
 
     def _reload_sections(self) -> None:
-        """Load cached sections from DB and push to the seek bar."""
-        self._seek_bar.set_sections([])
+        """Load cached sections from DB and push to the section bar."""
+        self._section_bar.set_sections([])
+        self._section_label.setText("")
         if self._current_uri:
             rows = self._db.get_sections(self._current_uri)
             if rows:
-                sections = [
+                self._section_bar.set_sections([
                     {
                         "start_sample": r["start_sample"],
                         "end_sample": r["end_sample"],
@@ -490,8 +515,20 @@ class MainWindow(QMainWindow):
                         "color": r["color"],
                     }
                     for r in rows
-                ]
-                self._seek_bar.set_sections(sections)
+                ])
+
+    def _on_section_looped(self, start_sample: int, end_sample: int) -> None:
+        self._loop_start_samples = start_sample
+        self._loop_end_samples = end_sample
+        self._loop_a_edit.setText(_fmt_time(start_sample / self.engine._sample_rate))
+        self._loop_b_edit.setText(_fmt_time(end_sample / self.engine._sample_rate))
+        self._loop_btn.setChecked(True)
+        self._update_engine_loop()
+        self.engine.seek(start_sample)
+
+    def _on_sections_changed(self, sections: list) -> None:
+        if self._current_uri:
+            self._db.save_sections(self._current_uri, sections)
 
     def _reload_library(self) -> None:
         tracks = self._db.all_tracks()
@@ -615,8 +652,17 @@ class MainWindow(QMainWindow):
         """Called every 100 ms. Syncs position label, play button, and seek bar."""
         self._update_position()
         self._sync_play_btn()
+        self._sync_section_label()
         if not self._seeking:
             self._sync_seek_bar()
+
+    def _sync_section_label(self) -> None:
+        pos = self.engine._input_pos
+        for s in self._section_bar.sections():
+            if s["start_sample"] <= pos < s["end_sample"]:
+                self._section_label.setText(f"Section {s['label']}")
+                return
+        self._section_label.setText("")
 
     def _update_position(self) -> None:
         pos = _fmt_time(self.engine.position_seconds())
