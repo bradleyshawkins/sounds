@@ -14,6 +14,8 @@ using the same dict schema.
 import numpy as np
 from PyQt6.QtCore import QThread, pyqtSignal
 
+from sounds.models import Section
+
 def _section_colors(n: int) -> list[str]:
     """Generate n visually distinct hex colors using evenly-spaced HSL hues."""
     import colorsys
@@ -33,8 +35,7 @@ class StructureAnalyzer(QThread):
     Signals
     -------
     finished(sections)
-        List of dicts, each with keys:
-        ``start_sample``, ``end_sample``, ``label``, ``color``.
+        List of :class:`~sounds.models.Section` objects.
     error(message)
         Emitted if analysis fails.
     """
@@ -59,7 +60,7 @@ class StructureAnalyzer(QThread):
     # Internal
     # ------------------------------------------------------------------
 
-    def _analyze(self) -> list[dict]:
+    def _analyze(self) -> list[Section]:
         import librosa  # imported here to keep startup fast
 
         # Convert (samples, channels) → mono (samples,)
@@ -100,15 +101,12 @@ class StructureAnalyzer(QThread):
         breakpoints = [0, *map(int, boundary_samples), n_samples]
         n_sections = len(breakpoints) - 1
         colors = _section_colors(n_sections)
-        sections = []
-        for i in range(n_sections):
-            sections.append(
-                {
-                    "start_sample": breakpoints[i],
-                    "end_sample": breakpoints[i + 1],
-                    "label": chr(ord("A") + i),
-                    "color": colors[i],
-                }
+        return [
+            Section(
+                start_sample=breakpoints[i],
+                end_sample=breakpoints[i + 1],
+                label=chr(ord("A") + i),
+                color=colors[i],
             )
-
-        return sections
+            for i in range(n_sections)
+        ]

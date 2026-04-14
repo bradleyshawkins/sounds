@@ -11,6 +11,8 @@ import sqlite3
 import sys
 from pathlib import Path
 
+from sounds.models import Section
+
 
 def _data_dir() -> Path:
     if sys.platform == "darwin":
@@ -173,32 +175,25 @@ class Database:
             "SELECT * FROM tracks ORDER BY artist, album, title"
         ).fetchall()
 
-    def save_sections(
-        self,
-        uri: str,
-        sections: list[dict],
-    ) -> None:
-        """Replace all sections for a track with the given list.
-
-        Each dict must have: start_sample, end_sample, label, color.
-        """
+    def save_sections(self, uri: str, sections: list[Section]) -> None:
+        """Replace all sections for a track with the given list."""
         track_id = self.get_or_create_track(uri)
         self._conn.execute("DELETE FROM sections WHERE track_id = ?", (track_id,))
         self._conn.executemany(
             "INSERT INTO sections (track_id, start_sample, end_sample, label, color) "
             "VALUES (?, ?, ?, ?, ?)",
             [
-                (track_id, s["start_sample"], s["end_sample"], s["label"], s["color"])
+                (track_id, s.start_sample, s.end_sample, s.label, s.color)
                 for s in sections
             ],
         )
         self._conn.commit()
 
-    def get_sections(self, uri: str) -> list[sqlite3.Row]:
+    def get_sections(self, uri: str) -> list[Section]:
         """Return saved sections for a track, ordered by start position."""
-        return self._conn.execute(
+        rows = self._conn.execute(
             """
-            SELECT sections.id, sections.start_sample, sections.end_sample,
+            SELECT sections.start_sample, sections.end_sample,
                    sections.label, sections.color
             FROM sections
             JOIN tracks ON tracks.id = sections.track_id
@@ -207,6 +202,15 @@ class Database:
             """,
             (uri,),
         ).fetchall()
+        return [
+            Section(
+                start_sample=r["start_sample"],
+                end_sample=r["end_sample"],
+                label=r["label"],
+                color=r["color"],
+            )
+            for r in rows
+        ]
 
     def close(self) -> None:
         self._conn.close()

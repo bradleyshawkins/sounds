@@ -505,17 +505,9 @@ class MainWindow(QMainWindow):
         self._section_bar.set_sections([])
         self._section_label.setText("")
         if self._current_uri:
-            rows = self._db.get_sections(self._current_uri)
-            if rows:
-                self._section_bar.set_sections([
-                    {
-                        "start_sample": r["start_sample"],
-                        "end_sample": r["end_sample"],
-                        "label": r["label"],
-                        "color": r["color"],
-                    }
-                    for r in rows
-                ])
+            sections = self._db.get_sections(self._current_uri)
+            if sections:
+                self._section_bar.set_sections(sections)
 
     def _on_section_looped(self, start_sample: int, end_sample: int) -> None:
         self._loop_start_samples = start_sample
@@ -659,8 +651,8 @@ class MainWindow(QMainWindow):
     def _sync_section_label(self) -> None:
         pos = self.engine._input_pos
         for s in self._section_bar.sections():
-            if s["start_sample"] <= pos < s["end_sample"]:
-                self._section_label.setText(f"Section {s['label']}")
+            if s.start_sample <= pos < s.end_sample:
+                self._section_label.setText(f"Section {s.label}")
                 return
         self._section_label.setText("")
 

@@ -19,6 +19,8 @@ from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QColor, QContextMenuEvent, QFont, QMouseEvent, QPainter
 from PyQt6.QtWidgets import QInputDialog, QMenu, QPushButton, QWidget
 
+from sounds.models import Section
+
 _BAR_HEIGHT = 24
 _BOUNDARY_GRAB_PX = 5
 _DRAG_THRESHOLD_PX = 4
@@ -57,7 +59,7 @@ class SectionBar(QWidget):
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        self._sections: list[dict] = []
+        self._sections: list[Section] = []
         self._edit_mode: bool = False
         self._sample_rate: int = 44100
         self._mode: int = _IDLE
@@ -76,15 +78,15 @@ class SectionBar(QWidget):
     # Public API
     # ------------------------------------------------------------------
 
-    def set_sections(self, sections: list[dict]) -> None:
-        self._sections = [dict(s) for s in sections]
+    def set_sections(self, sections: list[Section]) -> None:
+        self._sections = list(sections)
         # Reset edit mode whenever sections are replaced.
         self._edit_btn.setChecked(False)
         self.setVisible(bool(self._sections))
         self.update()
 
-    def sections(self) -> list[dict]:
-        return [dict(s) for s in self._sections]
+    def sections(self) -> list[Section]:
+        return list(self._sections)
 
     def set_sample_rate(self, sample_rate: int) -> None:
         self._sample_rate = sample_rate
@@ -112,7 +114,7 @@ class SectionBar(QWidget):
 
         w = self.width()
         h = self.height()
-        total = self._sections[-1]["end_sample"]
+        total = self._sections[-1].end_sample
         if total <= 0:
             return
 
@@ -121,14 +123,14 @@ class SectionBar(QWidget):
         p.setFont(font)
 
         for s in self._sections:
-            x1 = int(s["start_sample"] / total * w)
-            x2 = int(s["end_sample"] / total * w)
+            x1 = int(s.start_sample / total * w)
+            x2 = int(s.end_sample / total * w)
             band_w = x2 - x1
             if band_w <= 0:
                 continue
 
             p.setPen(Qt.PenStyle.NoPen)
-            p.setBrush(QColor(s["color"]))
+            p.setBrush(QColor(s.color))
             p.drawRect(x1, 0, band_w - 1, h)
 
             if band_w > 20:
@@ -136,18 +138,18 @@ class SectionBar(QWidget):
                 p.drawText(
                     x1 + 4, 0, band_w - 8, h,
                     Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft,
-                    s["label"],
+                    s.label,
                 )
 
         # Boundary dividers — brighter in edit mode to signal they're draggable
         p.setPen(QColor(255, 255, 255, 160) if self._edit_mode else QColor(0, 0, 0, 80))
         for s in self._sections[:-1]:
-            bx = int(s["end_sample"] / total * w)
+            bx = int(s.end_sample / total * w)
             p.drawLine(bx, 0, bx, h)
 
         # Time bubble at the boundary being dragged
         if self._mode == _BOUNDARY and self._drag_boundary >= 0:
-            sample = self._sections[self._drag_boundary]["end_sample"]
+            sample = self._sections[self._drag_boundary].end_sample
             bx = int(sample / total * w)
             time_str = _fmt_time(sample / self._sample_rate)
 
@@ -210,13 +212,13 @@ class SectionBar(QWidget):
             idx = self._section_at(x)
             if idx >= 0:
                 s = self._sections[idx]
-                self.section_looped.emit(s["start_sample"], s["end_sample"])
+                self.section_looped.emit(s.start_sample, s.end_sample)
 
         elif mode == _BOUNDARY:
             # Boundary drag complete — finalize and notify.
             new_sample = self._boundary_sample_from_x(self._drag_boundary, x)
-            self._sections[self._drag_boundary]["end_sample"] = new_sample
-            self._sections[self._drag_boundary + 1]["start_sample"] = new_sample
+            self._sections[self._drag_boundary].end_sample = new_sample
+            self._sections[self._drag_boundary + 1].start_sample = new_sample
             self._drag_boundary = -1
             self.sections_changed.emit(self.sections())
 
@@ -255,10 +257,10 @@ class SectionBar(QWidget):
     def _rename(self, idx: int) -> None:
         name, ok = QInputDialog.getText(
             self, "Rename Section", "Section name:",
-            text=self._sections[idx]["label"],
+            text=self._sections[idx].label,
         )
         if ok and name.strip():
-            self._sections[idx]["label"] = name.strip()
+            self._sections[idx].label = name.strip()
             self.update()
             self.sections_changed.emit(self.sections())
 
@@ -266,10 +268,10 @@ class SectionBar(QWidget):
         if len(self._sections) == 1:
             self._sections = []
         elif idx == 0:
-            self._sections[1]["start_sample"] = self._sections[0]["start_sample"]
+            self._sections[1].start_sample = self._sections[0].start_sample
             self._sections.pop(0)
         else:
-            self._sections[idx - 1]["end_sample"] = self._sections[idx]["end_sample"]
+            self._sections[idx - 1].end_sample = self._sections[idx].end_sample
             self._sections.pop(idx)
         self.setVisible(bool(self._sections))
         self.update()
@@ -277,7 +279,7 @@ class SectionBar(QWidget):
 
     def _merge(self, left: int, right: int) -> None:
         """Absorb section at right into section at left."""
-        self._sections[left]["end_sample"] = self._sections[right]["end_sample"]
+        self._sections[left].end_sample = self._sections[right].end_sample
         self._sections.pop(right)
         self.update()
         self.sections_changed.emit(self.sections())
@@ -287,7 +289,7 @@ class SectionBar(QWidget):
     # ------------------------------------------------------------------
 
     def _total_samples(self) -> int:
-        return self._sections[-1]["end_sample"] if self._sections else 0
+        return self._sections[-1].end_sample if self._sections else 0
 
     def _section_at(self, x: int) -> int:
         total = self._total_samples()
@@ -295,7 +297,7 @@ class SectionBar(QWidget):
             return -1
         w = self.width()
         for i, s in enumerate(self._sections):
-            if int(s["start_sample"] / total * w) <= x < int(s["end_sample"] / total * w):
+            if int(s.start_sample / total * w) <= x < int(s.end_sample / total * w):
                 return i
         return -1
 
@@ -305,14 +307,14 @@ class SectionBar(QWidget):
             return -1
         w = self.width()
         for i in range(len(self._sections) - 1):
-            if abs(x - int(self._sections[i]["end_sample"] / total * w)) <= _BOUNDARY_GRAB_PX:
+            if abs(x - int(self._sections[i].end_sample / total * w)) <= _BOUNDARY_GRAB_PX:
                 return i
         return -1
 
     def _move_boundary(self, boundary_idx: int, x: int) -> None:
         new_sample = self._boundary_sample_from_x(boundary_idx, x)
-        self._sections[boundary_idx]["end_sample"] = new_sample
-        self._sections[boundary_idx + 1]["start_sample"] = new_sample
+        self._sections[boundary_idx].end_sample = new_sample
+        self._sections[boundary_idx + 1].start_sample = new_sample
         self.update()
 
     def _boundary_sample_from_x(self, boundary_idx: int, x: int) -> int:
@@ -320,6 +322,6 @@ class SectionBar(QWidget):
         if total <= 0:
             return 0
         raw = int(max(0.0, min(1.0, x / self.width())) * total)
-        lo = self._sections[boundary_idx]["start_sample"] + 1
-        hi = self._sections[boundary_idx + 1]["end_sample"] - 1
+        lo = self._sections[boundary_idx].start_sample + 1
+        hi = self._sections[boundary_idx + 1].end_sample - 1
         return max(lo, min(hi, raw))
