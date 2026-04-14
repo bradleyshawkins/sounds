@@ -23,11 +23,13 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from sounds.engine.analyzer import StructureAnalyzer
 from sounds.engine.player import PlaybackEngine
 from sounds.engine.sources.file import FileSource
 from sounds.engine.sources.url import URLSource
 from sounds.library.db import Database
 from sounds.library.scanner import FolderScanner
+from sounds.ui.seek_bar import SeekBar
 
 
 def _fmt_time(seconds: float) -> str:
@@ -58,6 +60,7 @@ class MainWindow(QMainWindow):
         self._worker: _Worker | None = None
         self._db = Database()
         self._scanner: FolderScanner | None = None
+        self._analyzer: StructureAnalyzer | None = None
         self._current_uri: str | None = None
 
         # True while the user is dragging the seek bar so the position timer
@@ -141,22 +144,27 @@ class MainWindow(QMainWindow):
         self._play_btn.setFixedWidth(48)
         self._stop_btn = QPushButton("■")
         self._stop_btn.setFixedWidth(48)
+        self._analyze_btn = QPushButton("Analyze")
+        self._analyze_btn.setToolTip("Detect song structure and display sections on the seek bar")
+        self._analyze_btn.setEnabled(False)
         self._play_btn.clicked.connect(self._toggle_play)
         self._stop_btn.clicked.connect(self._on_stop)
+        self._analyze_btn.clicked.connect(self._on_analyze)
         self._position_label = QLabel("0:00 / 0:00")
         row.addWidget(self._play_btn)
         row.addWidget(self._stop_btn)
+        row.addSpacing(8)
+        row.addWidget(self._analyze_btn)
         row.addSpacing(8)
         row.addWidget(self._position_label)
         row.addStretch()
         return row
 
     def _build_seek_row(self) -> QHBoxLayout:
-        self._seek_slider = QSlider(Qt.Orientation.Horizontal)
-        self._seek_slider.setRange(0, 10000)
-        self._seek_slider.setValue(0)
-        self._seek_slider.sliderPressed.connect(self._on_seek_pressed)
-        self._seek_slider.sliderReleased.connect(self._on_seek_released)
+        self._seek_bar = SeekBar()
+        self._seek_bar.seek_started.connect(self._on_seek_pressed)
+        self._seek_bar.seek_requested.connect(self._on_seek_dragged)
+        self._seek_bar.seek_ended.connect(self._on_seek_released)
 
         # Current position — editable so the user can type a time and seek.
         self._pos_edit = QLineEdit("0:00")
@@ -173,7 +181,7 @@ class MainWindow(QMainWindow):
 
         row = QHBoxLayout()
         row.addWidget(self._pos_edit)
-        row.addWidget(self._seek_slider)
+        row.addWidget(self._seek_bar)
         row.addWidget(self._dur_label)
         return row
 
@@ -402,10 +410,11 @@ class MainWindow(QMainWindow):
         dur = _fmt_time(self.engine.duration_seconds())
         self._dur_label.setText(dur)
         self._status.showMessage(f"Ready — {dur}")
-        self._seek_slider.setValue(0)
+        self._seek_bar.set_position(0.0)
         self._update_position()
         self._position_timer.start()
         self._reload_saved_loops()
+        self._reload_sections()
 
     # ------------------------------------------------------------------
     # Library / scanning
@@ -440,6 +449,49 @@ class MainWindow(QMainWindow):
     def _on_scan_error(self, msg: str) -> None:
         self._scan_btn.setEnabled(True)
         QMessageBox.critical(self, "Scan Error", msg)
+
+    # ------------------------------------------------------------------
+    # Structure analysis
+    # ------------------------------------------------------------------
+
+    def _on_analyze(self) -> None:
+        if self.engine._raw is None:
+            return
+        self._analyze_btn.setEnabled(False)
+        self._status.showMessage("Analyzing structure…")
+        self._analyzer = StructureAnalyzer(self.engine._raw, self.engine._sample_rate)
+        self._analyzer.finished.connect(self._on_analysis_done)
+        self._analyzer.error.connect(self._on_analysis_error)
+        self._analyzer.start()
+
+    def _on_analysis_done(self, sections: list) -> None:
+        self._analyze_btn.setEnabled(True)
+        if self._current_uri:
+            self._db.save_sections(self._current_uri, sections)
+        self._seek_bar.set_sections(sections)
+        self._status.showMessage(f"Found {len(sections)} sections")
+
+    def _on_analysis_error(self, msg: str) -> None:
+        self._analyze_btn.setEnabled(True)
+        self._status.showMessage("Analysis failed")
+        QMessageBox.critical(self, "Analysis Error", msg)
+
+    def _reload_sections(self) -> None:
+        """Load cached sections from DB and push to the seek bar."""
+        self._seek_bar.set_sections([])
+        if self._current_uri:
+            rows = self._db.get_sections(self._current_uri)
+            if rows:
+                sections = [
+                    {
+                        "start_sample": r["start_sample"],
+                        "end_sample": r["end_sample"],
+                        "label": r["label"],
+                        "color": r["color"],
+                    }
+                    for r in rows
+                ]
+                self._seek_bar.set_sections(sections)
 
     def _reload_library(self) -> None:
         tracks = self._db.all_tracks()
@@ -564,7 +616,7 @@ class MainWindow(QMainWindow):
         self._update_position()
         self._sync_play_btn()
         if not self._seeking:
-            self._sync_seek_slider()
+            self._sync_seek_bar()
 
     def _update_position(self) -> None:
         pos = _fmt_time(self.engine.position_seconds())
@@ -575,13 +627,10 @@ class MainWindow(QMainWindow):
             self._pos_edit.setText(pos)
         self._dur_label.setText(dur)
 
-    def _sync_seek_slider(self) -> None:
+    def _sync_seek_bar(self) -> None:
         raw = self.engine._raw_samples
         if raw > 0:
-            val = int(self.engine._input_pos / raw * 10000)
-            self._seek_slider.blockSignals(True)
-            self._seek_slider.setValue(val)
-            self._seek_slider.blockSignals(False)
+            self._seek_bar.set_position(self.engine._input_pos / raw)
 
     # ------------------------------------------------------------------
     # Seek bar
@@ -590,12 +639,13 @@ class MainWindow(QMainWindow):
     def _on_seek_pressed(self) -> None:
         self._seeking = True
 
-    def _on_seek_released(self) -> None:
-        self._seeking = False
+    def _on_seek_dragged(self, fraction: float) -> None:
         raw = self.engine._raw_samples
         if raw > 0:
-            sample = int(self._seek_slider.value() / 10000 * raw)
-            self.engine.seek(sample)
+            self.engine.seek(int(fraction * raw))
+
+    def _on_seek_released(self) -> None:
+        self._seeking = False
 
     def _on_pos_edit_committed(self) -> None:
         """Parse a typed M:SS time and seek to it."""
@@ -748,7 +798,8 @@ class MainWindow(QMainWindow):
         for w in (
             self._play_btn,
             self._stop_btn,
-            self._seek_slider,
+            self._seek_bar,
+            self._analyze_btn,
             self._loop_btn,
             self._set_a_btn,
             self._set_b_btn,

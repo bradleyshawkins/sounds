@@ -334,5 +334,8 @@ class PlaybackEngine:
                     audio = audio * self._volume
                 self._output_queue.put(audio)
 
-            with self._lock:
-                self._input_pos = chunk_end
+            # Only advance if no seek arrived during this chunk — a seek sets
+            # _input_pos and _seek_event; writing chunk_end here would clobber it.
+            if not self._seek_event.is_set():
+                with self._lock:
+                    self._input_pos = chunk_end
